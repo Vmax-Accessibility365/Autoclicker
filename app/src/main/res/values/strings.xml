@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Text Auto Clicker</string>
+    <string name="accessibility_service_description">Allows Text Auto Clicker to tap the screen at the location of text you specify.</string>
+    <string name="notification_channel_name">Auto Clicker Service</string>
+    <string name="hint_target_text">Target text (comma-separated for sequence): Submit, Next, Login</string>
+    <string name="hint_interval">Interval in ms (e.g. 1000)</string>
+    <string name="label_retry">Retry if text not found</string>
+    <string name="btn_start">START</string>
+    <string name="btn_stop">STOP</string>
+    <string name="status_idle">Idle</string>
+    <string name="status_running">Running…</string>
+</resources>
