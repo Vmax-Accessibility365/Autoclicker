@@ -4,6 +4,6 @@
     android:accessibilityFeedbackType="feedbackGeneric"
     android:canRetrieveWindowContent="true"
     android:canPerformGestures="true"
-    android:flags="flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds"
     android:notificationTimeout="100"
-    android:description="@string/vmax_accessibility_description" />
+    android:description="@string/accessibility_service_description" />
