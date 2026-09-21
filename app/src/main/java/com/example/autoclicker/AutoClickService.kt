@@ -21,34 +21,26 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Foreground service that owns the MediaProjection and runs the
  * capture -> OCR -> match -> click sequence.
  *
- * Sequence behavior:
+ * Sequence:
  *
  * Target 1
  *    -> found -> click -> Target 2
- *    -> not found -> keep checking Target 1
+ *    -> not found -> check Target 1 again
  *
  * Target 2
  *    -> found -> click -> Target 3
- *    -> not found -> keep checking Target 2
+ *    -> not found -> check Target 2 again
  *
- * The same behavior continues until the final target.
+ * Continues until the final target.
  *
- * The sequence does NOT loop back to Target 1 after the final target.
- *
- * Intent extras expected on the FIRST start command:
- *   EXTRA_RESULT_CODE : Int
- *   EXTRA_RESULT_DATA : Intent
- *   EXTRA_TARGET_TEXT : String - comma separated target text sequence
- *   EXTRA_INTERVAL_MS : Long
- *   EXTRA_RETRY       : Boolean
- *
- * Action ACTION_STOP stops the loop and the service.
+ * After the final target, the sequence stops.
  */
 class AutoClickService : Service() {
 
@@ -61,9 +53,12 @@ class AutoClickService : Service() {
         const val EXTRA_INTERVAL_MS = "extra_interval_ms"
         const val EXTRA_RETRY = "extra_retry"
 
-        const val ACTION_STOP = "com.example.autoclicker.action.STOP"
+        const val ACTION_STOP =
+            "com.example.autoclicker.action.STOP"
 
-        private const val NOTIFICATION_CHANNEL_ID = "auto_clicker_channel"
+        private const val NOTIFICATION_CHANNEL_ID =
+            "auto_clicker_channel"
+
         private const val NOTIFICATION_ID = 1001
 
         private const val MIN_INTERVAL_MS = 50L
@@ -74,25 +69,27 @@ class AutoClickService : Service() {
     }
 
     private var captureManager: ScreenCaptureManager? = null
+
     private val ocrHelper = OcrHelper()
 
     private var intervalMs: Long = DEFAULT_INTERVAL_MS
 
     // Kept for compatibility with the existing Intent/API.
-    // The sequence always stays on the current target until it is found.
     private var retryIfNotFound: Boolean = true
 
     private lateinit var sequence: TextSequence
 
     private val serviceJob = Job()
-    private val serviceScope = CoroutineScope(
-        Dispatchers.Default + serviceJob
-    )
+
+    private val serviceScope =
+        CoroutineScope(
+            Dispatchers.Default + serviceJob
+        )
 
     private var loopJob: Job? = null
 
-    // Prevents stopSelfCleanly() from running more than once.
-    private val isStopping = AtomicBoolean(false)
+    private val isStopping =
+        AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -110,25 +107,33 @@ class AutoClickService : Service() {
             return START_NOT_STICKY
         }
 
-        // A fresh start means the service is no longer in stopping state.
         isStopping.set(false)
 
-        // Foreground status must be established immediately.
         startForegroundCompat()
 
-        // Ignore duplicate start commands while the current sequence is running.
+        /*
+         * Ignore duplicate start commands while
+         * the current sequence is running.
+         */
         if (loopJob?.isActive == true) {
             return START_STICKY
         }
 
         val resultCode =
-            intent?.getIntExtra(EXTRA_RESULT_CODE, -1) ?: -1
+            intent?.getIntExtra(
+                EXTRA_RESULT_CODE,
+                -1
+            ) ?: -1
 
         val resultData: Intent? =
-            intent?.getParcelableExtra(EXTRA_RESULT_DATA)
+            intent?.getParcelableExtra(
+                EXTRA_RESULT_DATA
+            )
 
         val targetText =
-            intent?.getStringExtra(EXTRA_TARGET_TEXT).orEmpty()
+            intent?.getStringExtra(
+                EXTRA_TARGET_TEXT
+            ).orEmpty()
 
         val requestedInterval =
             intent?.getLongExtra(
@@ -136,25 +141,33 @@ class AutoClickService : Service() {
                 DEFAULT_INTERVAL_MS
             ) ?: DEFAULT_INTERVAL_MS
 
-        // Never allow an interval below 50 ms.
-        intervalMs = requestedInterval.coerceAtLeast(MIN_INTERVAL_MS)
+        intervalMs =
+            requestedInterval.coerceAtLeast(
+                MIN_INTERVAL_MS
+            )
 
         retryIfNotFound =
-            intent?.getBooleanExtra(EXTRA_RETRY, true) ?: true
+            intent?.getBooleanExtra(
+                EXTRA_RETRY,
+                true
+            ) ?: true
 
         /*
          * IMPORTANT:
          *
-         * loop = false means:
+         * TextSequence controls:
          *
-         * Target 1 -> Target 2 -> Target 3 -> ... -> final Target
+         * Target 1 -> Target 2 -> Target 3 -> ...
          *
-         * After the final Target, the sequence ends.
-         * It does NOT return to Target 1.
+         * No loop parameter is passed here because
+         * the current TextSequence constructor does
+         * not define a "loop" parameter.
+         *
+         * The sequence ends naturally after the
+         * final target.
          */
         sequence = TextSequence(
-            targetText,
-            loop = false
+            targetText
         )
 
         if (
@@ -165,6 +178,7 @@ class AutoClickService : Service() {
                 TAG,
                 "Missing/invalid MediaProjection result, stopping."
             )
+
             stopSelfCleanly()
             return START_NOT_STICKY
         }
@@ -174,6 +188,7 @@ class AutoClickService : Service() {
                 TAG,
                 "Accessibility service not enabled, stopping."
             )
+
             stopSelfCleanly()
             return START_NOT_STICKY
         }
@@ -189,15 +204,16 @@ class AutoClickService : Service() {
                 resultData
             )
 
-        captureManager = ScreenCaptureManager(
-            context = this,
-            mediaProjection = projection,
-            onProjectionStopped = {
-                stopSelfCleanly()
+        captureManager =
+            ScreenCaptureManager(
+                context = this,
+                mediaProjection = projection,
+                onProjectionStopped = {
+                    stopSelfCleanly()
+                }
+            ).also {
+                it.start()
             }
-        ).also {
-            it.start()
-        }
 
         isRunning = true
 
@@ -207,16 +223,25 @@ class AutoClickService : Service() {
     }
 
     private fun startForegroundCompat() {
-        val notification = buildNotification()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val notification =
+            buildNotification()
+
+        if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.Q
+        ) {
+
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                ServiceInfo
+                    .FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
+
         } else {
+
             startForeground(
                 NOTIFICATION_ID,
                 notification
@@ -226,173 +251,156 @@ class AutoClickService : Service() {
 
     private fun startLoop() {
 
-        loopJob = serviceScope.launch {
+        loopJob =
+            serviceScope.launch {
 
-            while (isActive) {
+                while (isActive) {
 
-                /*
-                 * currentTarget is the ONLY target we are allowed
-                 * to search for during this iteration.
-                 *
-                 * If it is not found, we stay on the same target.
-                 */
-                val target = sequence.currentTarget
+                    /*
+                     * Only the current target is searched.
+                     */
+                    val target =
+                        sequence.currentTarget
 
-                if (target == null) {
-                    Log.d(
-                        TAG,
-                        "Sequence completed. No target remaining."
-                    )
-                    break
-                }
+                    if (target == null) {
 
-                val frameStart =
-                    System.currentTimeMillis()
+                        Log.d(
+                            TAG,
+                            "Sequence completed. No target remaining."
+                        )
 
-                val bitmap =
-                    captureManager?.captureBitmap()
+                        break
+                    }
 
-                if (bitmap != null) {
+                    val frameStart =
+                        System.currentTimeMillis()
 
-                    try {
+                    val bitmap =
+                        captureManager
+                            ?.captureBitmap()
 
-                        val blocks =
-                            ocrHelper.recognizeTextSuspend(bitmap)
+                    if (bitmap != null) {
 
-                        /*
-                         * Search ONLY for the current target.
-                         *
-                         * We do not search for the next target
-                         * until this one has been clicked.
-                         */
-                        val match =
-                            TextMatcher.findMatch(
-                                blocks,
-                                target
-                            )
+                        try {
 
-                        if (match != null) {
+                            val blocks =
+                                ocrHelper
+                                    .recognizeTextSuspend(
+                                        bitmap
+                                    )
 
-                            val cx =
-                                match.boundingBox.exactCenterX()
-
-                            val cy =
-                                match.boundingBox.exactCenterY()
-
-                            val clickService =
-                                ClickAccessibilityService.instance
-
-                            if (clickService != null) {
-
-                                /*
-                                 * Current target found.
-                                 *
-                                 * First click it.
-                                 * Then advance to the next target.
-                                 */
-                                clickService.clickAt(
-                                    cx,
-                                    cy
+                            /*
+                             * Search ONLY for current target.
+                             */
+                            val match =
+                                TextMatcher.findMatch(
+                                    blocks,
+                                    target
                                 )
 
-                                Log.d(
-                                    TAG,
-                                    "Clicked '$target' at ($cx, $cy)"
-                                )
+                            if (match != null) {
 
-                                sequence.advance()
+                                val cx =
+                                    match.boundingBox
+                                        .exactCenterX()
+
+                                val cy =
+                                    match.boundingBox
+                                        .exactCenterY()
+
+                                val clickService =
+                                    ClickAccessibilityService
+                                        .instance
+
+                                if (clickService != null) {
+
+                                    /*
+                                     * Click current target first.
+                                     * Only then advance.
+                                     */
+                                    clickService.clickAt(
+                                        cx,
+                                        cy
+                                    )
+
+                                    Log.d(
+                                        TAG,
+                                        "Clicked '$target' at ($cx, $cy)"
+                                    )
+
+                                    sequence.advance()
+
+                                } else {
+
+                                    /*
+                                     * Do NOT advance if the
+                                     * accessibility service is gone.
+                                     */
+                                    Log.w(
+                                        TAG,
+                                        "Accessibility service unavailable; " +
+                                            "keeping target '$target'."
+                                    )
+                                }
 
                             } else {
 
                                 /*
-                                 * Accessibility service disappeared.
+                                 * Target not found.
                                  *
-                                 * Do NOT advance the sequence.
-                                 * The same target remains current.
+                                 * Stay on the SAME target.
                                  */
-                                Log.w(
+                                Log.d(
                                     TAG,
-                                    "Accessibility service unavailable; " +
-                                        "keeping target '$target'."
+                                    "'$target' not found; checking same target again."
                                 )
                             }
 
-                        } else {
+                        } finally {
 
-                            /*
-                             * IMPORTANT:
-                             *
-                             * Target was not found.
-                             *
-                             * Do NOT call sequence.advance().
-                             *
-                             * Therefore the next loop searches
-                             * for the SAME target again.
-                             */
-                            Log.d(
-                                TAG,
-                                "'$target' not found; checking same target again."
-                            )
-
+                            bitmap.recycle()
                         }
 
-                    } finally {
-                        bitmap.recycle()
+                    } else {
+
+                        /*
+                         * No frame yet.
+                         * Same target remains active.
+                         */
+                        Log.d(
+                            TAG,
+                            "No frame available; retrying '$target'."
+                        )
                     }
 
-                } else {
+                    val elapsed =
+                        System.currentTimeMillis() -
+                            frameStart
 
-                    /*
-                     * No screen frame yet.
-                     * Keep the same target and try again.
-                     */
-                    Log.d(
-                        TAG,
-                        "No frame available; retrying '$target'."
-                    )
+                    val wait =
+                        (
+                            intervalMs - elapsed
+                        ).coerceAtLeast(0L)
+
+                    if (wait > 0L) {
+                        delay(wait)
+                    }
                 }
 
-                /*
-                 * Wait only for the remaining interval.
-                 * Minimum interval is 50 ms.
-                 */
-                val elapsed =
-                    System.currentTimeMillis() - frameStart
-
-                val wait =
-                    (intervalMs - elapsed).coerceAtLeast(0L)
-
-                if (wait > 0L) {
-                    delay(wait)
+                withContext(Dispatchers.Main) {
+                    stopSelfCleanly()
                 }
             }
-
-            /*
-             * Sequence finished or service was stopped.
-             */
-            withContextMain {
-                stopSelfCleanly()
-            }
-        }
-    }
-
-    /**
-     * Runs stopSelfCleanly() on the main dispatcher because
-     * it touches Android system services.
-     */
-    private suspend fun withContextMain(
-        block: () -> Unit
-    ) {
-        kotlinx.coroutines.withContext(
-            Dispatchers.Main
-        ) {
-            block()
-        }
     }
 
     private fun stopSelfCleanly() {
 
-        if (!isStopping.compareAndSet(false, true)) {
+        if (
+            !isStopping.compareAndSet(
+                false,
+                true
+            )
+        ) {
             return
         }
 
@@ -413,22 +421,29 @@ class AutoClickService : Service() {
 
     private fun createNotificationChannel() {
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.O
+        ) {
 
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                getString(
-                    R.string.notification_channel_name
-                ),
-                NotificationManager.IMPORTANCE_LOW
-            )
+            val channel =
+                NotificationChannel(
+                    NOTIFICATION_CHANNEL_ID,
+                    getString(
+                        R.string.notification_channel_name
+                    ),
+                    NotificationManager
+                        .IMPORTANCE_LOW
+                )
 
             val manager =
                 getSystemService(
                     NotificationManager::class.java
                 )
 
-            manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(
+                channel
+            )
         }
     }
 
