@@ -1,74 +1,73 @@
-<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<?xml version="1.0" encoding="utf-8"?><LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+xmlns:app="http://schemas.android.com/apk/res-auto"
+android:layout_width="match_parent"
+android:layout_height="match_parent"
+android:orientation="vertical"
+android:padding="24dp">
+
+<TextView
+    android:id="@+id/titleText"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/app_name"
+    android:textSize="22sp"
+    android:textStyle="bold"
+    android:layout_marginBottom="16dp" />
+
+<EditText
+    android:id="@+id/textInput"
     android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="24dp">
+    android:layout_height="wrap_content"
+    android:hint="@string/hint_target_text"
+    android:inputType="text"
+    android:minLines="2" />
 
-    <TextView
-        android:id="@+id/titleText"
-        android:layout_width="wrap_content"
+<EditText
+    android:id="@+id/intervalInput"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:hint="@string/hint_interval"
+    android:inputType="number"
+    android:text="50"
+    android:layout_marginTop="12dp" />
+
+<CheckBox
+    android:id="@+id/retryCheck"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/label_retry"
+    android:checked="true"
+    android:layout_marginTop="8dp" />
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:layout_marginTop="20dp">
+
+    <Button
+        android:id="@+id/startBtn"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:text="@string/app_name"
-        android:textSize="22sp"
-        android:textStyle="bold"
-        android:layout_marginBottom="16dp" />
+        android:layout_weight="1"
+        android:text="@string/btn_start" />
 
-    <EditText
-        android:id="@+id/textInput"
-        android:layout_width="match_parent"
+    <Button
+        android:id="@+id/stopBtn"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:hint="@string/hint_target_text"
-        android:inputType="text"
-        android:minLines="2" />
+        android:layout_weight="1"
+        android:layout_marginStart="12dp"
+        android:text="@string/btn_stop"
+        android:enabled="false" />
+</LinearLayout>
 
-    <EditText
-        android:id="@+id/intervalInput"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="@string/hint_interval"
-        android:inputType="number"
-        android:text="1000"
-        android:layout_marginTop="12dp" />
-
-    <CheckBox
-        android:id="@+id/retryCheck"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/label_retry"
-        android:checked="true"
-        android:layout_marginTop="8dp" />
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="20dp">
-
-        <Button
-            android:id="@+id/startBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/btn_start" />
-
-        <Button
-            android:id="@+id/stopBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="12dp"
-            android:text="@string/btn_stop"
-            android:enabled="false" />
-    </LinearLayout>
-
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/status_idle"
-        android:textSize="16sp"
-        android:layout_marginTop="20dp" />
+<TextView
+    android:id="@+id/statusText"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/status_idle"
+    android:textSize="16sp"
+    android:layout_marginTop="20dp" />
 
 </LinearLayout>
