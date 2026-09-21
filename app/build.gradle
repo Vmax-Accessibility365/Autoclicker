@@ -19,6 +19,7 @@ android {
         debug {
             minifyEnabled false
         }
+
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -49,6 +50,6 @@ dependencies {
     // OCR
     implementation 'com.google.mlkit:text-recognition:16.0.0'
 
-    // Coroutines - used to sequence capture -> OCR -> click without race conditions
+    // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 }
