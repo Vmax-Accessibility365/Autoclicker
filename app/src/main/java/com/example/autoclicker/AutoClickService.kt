@@ -1,402 +1,326 @@
 package com.example.autoclicker
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
-import android.content.Intent
-import android.content.pm.ServiceInfo
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
+import android.hardware.display.VirtualDisplay
+import android.media.Image
+import android.media.ImageReader
 import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
-import android.os.Build
-import android.os.IBinder
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
-import androidx.core.app.NotificationCompat
-import androidx.core.app.ServiceCompat
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Foreground service that owns the MediaProjection and runs the
- * capture -> OCR -> match -> click sequence.
+ * Handles MediaProjection screen capture.
  *
- * Sequence:
- *
- * Target 1
- *    -> found -> click -> Target 2
- *    -> not found -> check Target 1 again
- *
- * Target 2
- *    -> found -> click -> Target 3
- *    -> not found -> check Target 2 again
- *
- * Continues until the final target.
- *
- * After the final target, the sequence stops.
+ * This class only captures screen frames.
+ * Target 1 -> Target 2 -> Target 3 sequence control
+ * remains inside AutoClickService / TextSequence.
  */
-class AutoClickService : Service() {
+class ScreenCaptureManager(
+    private val context: Context,
+    private val mediaProjection: MediaProjection,
+    private val onProjectionStopped: () -> Unit
+) {
 
     companion object {
-        private const val TAG = "AutoClickService"
+        private const val TAG = "ScreenCaptureManager"
+        private const val VIRTUAL_DISPLAY_NAME =
+            "AutoClickScreenCapture"
 
-        const val EXTRA_RESULT_CODE = "extra_result_code"
-        const val EXTRA_RESULT_DATA = "extra_result_data"
-        const val EXTRA_TARGET_TEXT = "extra_target_text"
-        const val EXTRA_INTERVAL_MS = "extra_interval_ms"
-        const val EXTRA_RETRY = "extra_retry"
-
-        const val ACTION_STOP =
-            "com.example.autoclicker.action.STOP"
-
-        private const val NOTIFICATION_CHANNEL_ID =
-            "auto_clicker_channel"
-
-        private const val NOTIFICATION_ID = 1001
-
-        private const val MIN_INTERVAL_MS = 50L
-        private const val DEFAULT_INTERVAL_MS = 50L
-
-        var isRunning: Boolean = false
-            private set
+        private const val IMAGE_READER_MAX_IMAGES = 2
     }
 
-    private var captureManager: ScreenCaptureManager? = null
+    private var imageReader: ImageReader? = null
+    private var virtualDisplay: VirtualDisplay? = null
 
-    private val ocrHelper = OcrHelper()
+    private val handlerThread =
+        HandlerThread("ScreenCaptureThread").apply {
+            start()
+        }
 
-    private var intervalMs: Long = DEFAULT_INTERVAL_MS
+    private val backgroundHandler =
+        Handler(handlerThread.looper)
 
-    // Kept for compatibility with the existing Intent/API.
-    private var retryIfNotFound: Boolean = true
+    private val width: Int
+    private val height: Int
+    private val density: Int
 
-    private lateinit var sequence: TextSequence
-
-    private val serviceJob = Job()
-
-    private val serviceScope =
-        CoroutineScope(
-            Dispatchers.Default + serviceJob
-        )
-
-    private var loopJob: Job? = null
-
-    private val isStopping =
+    private val stopped =
         AtomicBoolean(false)
 
-    override fun onCreate() {
-        super.onCreate()
-        createNotificationChannel()
-    }
+    private val projectionCallback =
+        object : MediaProjection.Callback() {
 
-    override fun onStartCommand(
-        intent: Intent?,
-        flags: Int,
-        startId: Int
-    ): Int {
+            override fun onStop() {
 
-        if (intent?.action == ACTION_STOP) {
-            stopSelfCleanly()
-            return START_NOT_STICKY
+                Log.w(
+                    TAG,
+                    "MediaProjection stopped by system or user"
+                )
+
+                if (
+                    stopped.compareAndSet(
+                        false,
+                        true
+                    )
+                ) {
+
+                    releaseResources()
+
+                    onProjectionStopped()
+                }
+            }
         }
 
-        isStopping.set(false)
+    init {
 
-        startForegroundCompat()
+        val metrics =
+            context.resources.displayMetrics
 
-        /*
-         * Ignore duplicate start commands while
-         * the current sequence is running.
-         */
-        if (loopJob?.isActive == true) {
-            return START_STICKY
-        }
+        width =
+            metrics.widthPixels
 
-        val resultCode =
-            intent?.getIntExtra(
-                EXTRA_RESULT_CODE,
-                -1
-            ) ?: -1
+        height =
+            metrics.heightPixels
 
-        val resultData: Intent? =
-            intent?.getParcelableExtra(
-                EXTRA_RESULT_DATA
-            )
-
-        val targetText =
-            intent?.getStringExtra(
-                EXTRA_TARGET_TEXT
-            ).orEmpty()
-
-        val requestedInterval =
-            intent?.getLongExtra(
-                EXTRA_INTERVAL_MS,
-                DEFAULT_INTERVAL_MS
-            ) ?: DEFAULT_INTERVAL_MS
-
-        intervalMs =
-            requestedInterval.coerceAtLeast(
-                MIN_INTERVAL_MS
-            )
-
-        retryIfNotFound =
-            intent?.getBooleanExtra(
-                EXTRA_RETRY,
-                true
-            ) ?: true
+        density =
+            metrics.densityDpi
 
         /*
-         * IMPORTANT:
-         *
-         * TextSequence controls:
-         *
-         * Target 1 -> Target 2 -> Target 3 -> ...
-         *
-         * No loop parameter is passed here because
-         * the current TextSequence constructor does
-         * not define a "loop" parameter.
-         *
-         * The sequence ends naturally after the
-         * final target.
+         * Android 14+ requires the callback to be
+         * registered before createVirtualDisplay().
          */
-        sequence = TextSequence(
-            targetText
+        mediaProjection.registerCallback(
+            projectionCallback,
+            backgroundHandler
         )
+    }
 
-        if (
-            resultData == null ||
-            resultCode != android.app.Activity.RESULT_OK
-        ) {
-            Log.e(
+    fun start() {
+
+        if (stopped.get()) {
+
+            Log.w(
                 TAG,
-                "Missing/invalid MediaProjection result, stopping."
+                "start() ignored: manager already stopped"
             )
 
-            stopSelfCleanly()
-            return START_NOT_STICKY
+            return
         }
 
-        if (!ClickAccessibilityService.isReady()) {
-            Log.e(
-                TAG,
-                "Accessibility service not enabled, stopping."
-            )
-
-            stopSelfCleanly()
-            return START_NOT_STICKY
+        if (virtualDisplay != null) {
+            return
         }
 
-        val projectionManager =
-            getSystemService(
-                MEDIA_PROJECTION_SERVICE
-            ) as MediaProjectionManager
+        try {
 
-        val projection: MediaProjection =
-            projectionManager.getMediaProjection(
-                resultCode,
-                resultData
-            )
+            if (
+                width <= 0 ||
+                height <= 0 ||
+                density <= 0
+            ) {
 
-        captureManager =
-            ScreenCaptureManager(
-                context = this,
-                mediaProjection = projection,
-                onProjectionStopped = {
-                    stopSelfCleanly()
-                }
-            ).also {
-                it.start()
+                Log.e(
+                    TAG,
+                    "Invalid display metrics: " +
+                        "${width}x${height}, density=$density"
+                )
+
+                releaseResources()
+                return
             }
 
-        isRunning = true
+            val reader =
+                ImageReader.newInstance(
+                    width,
+                    height,
+                    PixelFormat.RGBA_8888,
+                    IMAGE_READER_MAX_IMAGES
+                )
 
-        startLoop()
+            imageReader = reader
 
-        return START_STICKY
-    }
+            virtualDisplay =
+                mediaProjection.createVirtualDisplay(
+                    VIRTUAL_DISPLAY_NAME,
+                    width,
+                    height,
+                    density,
+                    DisplayManager
+                        .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    reader.surface,
+                    null,
+                    backgroundHandler
+                )
 
-    private fun startForegroundCompat() {
-
-        val notification =
-            buildNotification()
-
-        if (
-            Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.Q
-        ) {
-
-            ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo
-                    .FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            Log.d(
+                TAG,
+                "VirtualDisplay created successfully " +
+                    "($width x $height)"
             )
 
-        } else {
+        } catch (e: Exception) {
 
-            startForeground(
-                NOTIFICATION_ID,
-                notification
+            Log.e(
+                TAG,
+                "Failed to start ScreenCaptureManager",
+                e
             )
+
+            stop()
         }
     }
 
-    private fun startLoop() {
+    /**
+     * Returns the newest available screen frame.
+     *
+     * Returns null when a new frame is not available yet.
+     */
+    fun captureBitmap(): Bitmap? {
 
-        loopJob =
-            serviceScope.launch {
+        if (stopped.get()) {
+            return null
+        }
 
-                while (isActive) {
+        val reader =
+            imageReader ?: return null
 
-                    /*
-                     * Only the current target is searched.
-                     */
-                    val target =
-                        sequence.currentTarget
+        val image =
+            try {
 
-                    if (target == null) {
+                /*
+                 * acquireLatestImage() intentionally used here.
+                 *
+                 * Old frames are discarded so the OCR loop
+                 * works with the newest available screen.
+                 */
+                reader.acquireLatestImage()
 
-                        Log.d(
-                            TAG,
-                            "Sequence completed. No target remaining."
-                        )
+            } catch (e: Exception) {
 
-                        break
-                    }
+                Log.e(
+                    TAG,
+                    "acquireLatestImage() failed",
+                    e
+                )
 
-                    val frameStart =
-                        System.currentTimeMillis()
+                null
+            } ?: return null
 
-                    val bitmap =
-                        captureManager
-                            ?.captureBitmap()
-
-                    if (bitmap != null) {
-
-                        try {
-
-                            val blocks =
-                                ocrHelper
-                                    .recognizeTextSuspend(
-                                        bitmap
-                                    )
-
-                            /*
-                             * Search ONLY for current target.
-                             */
-                            val match =
-                                TextMatcher.findMatch(
-                                    blocks,
-                                    target
-                                )
-
-                            if (match != null) {
-
-                                val cx =
-                                    match.boundingBox
-                                        .exactCenterX()
-
-                                val cy =
-                                    match.boundingBox
-                                        .exactCenterY()
-
-                                val clickService =
-                                    ClickAccessibilityService
-                                        .instance
-
-                                if (clickService != null) {
-
-                                    /*
-                                     * Click current target first.
-                                     * Only then advance.
-                                     */
-                                    clickService.clickAt(
-                                        cx,
-                                        cy
-                                    )
-
-                                    Log.d(
-                                        TAG,
-                                        "Clicked '$target' at ($cx, $cy)"
-                                    )
-
-                                    sequence.advance()
-
-                                } else {
-
-                                    /*
-                                     * Do NOT advance if the
-                                     * accessibility service is gone.
-                                     */
-                                    Log.w(
-                                        TAG,
-                                        "Accessibility service unavailable; " +
-                                            "keeping target '$target'."
-                                    )
-                                }
-
-                            } else {
-
-                                /*
-                                 * Target not found.
-                                 *
-                                 * Stay on the SAME target.
-                                 */
-                                Log.d(
-                                    TAG,
-                                    "'$target' not found; checking same target again."
-                                )
-                            }
-
-                        } finally {
-
-                            bitmap.recycle()
-                        }
-
-                    } else {
-
-                        /*
-                         * No frame yet.
-                         * Same target remains active.
-                         */
-                        Log.d(
-                            TAG,
-                            "No frame available; retrying '$target'."
-                        )
-                    }
-
-                    val elapsed =
-                        System.currentTimeMillis() -
-                            frameStart
-
-                    val wait =
-                        (
-                            intervalMs - elapsed
-                        ).coerceAtLeast(0L)
-
-                    if (wait > 0L) {
-                        delay(wait)
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    stopSelfCleanly()
-                }
-            }
+        return convertImageToBitmap(image)
     }
 
-    private fun stopSelfCleanly() {
+    private fun convertImageToBitmap(
+        image: Image
+    ): Bitmap? {
+
+        return try {
+
+            if (image.planes.isEmpty()) {
+                return null
+            }
+
+            val plane =
+                image.planes[0]
+
+            val buffer =
+                plane.buffer
+
+            val pixelStride =
+                plane.pixelStride
+
+            val rowStride =
+                plane.rowStride
+
+            if (pixelStride <= 0) {
+
+                Log.w(
+                    TAG,
+                    "Invalid pixelStride: $pixelStride"
+                )
+
+                return null
+            }
+
+            val rowPadding =
+                rowStride -
+                    pixelStride * width
+
+            if (rowPadding < 0) {
+
+                Log.w(
+                    TAG,
+                    "Invalid rowPadding: $rowPadding"
+                )
+
+                return null
+            }
+
+            val paddedWidth =
+                width +
+                    rowPadding / pixelStride
+
+            val bitmap =
+                Bitmap.createBitmap(
+                    paddedWidth,
+                    height,
+                    Bitmap.Config.ARGB_8888
+                )
+
+            buffer.rewind()
+
+            bitmap.copyPixelsFromBuffer(
+                buffer
+            )
+
+            if (paddedWidth == width) {
+
+                bitmap
+
+            } else {
+
+                val cropped =
+                    Bitmap.createBitmap(
+                        bitmap,
+                        0,
+                        0,
+                        width,
+                        height
+                    )
+
+                bitmap.recycle()
+
+                cropped
+            }
+
+        } catch (e: Exception) {
+
+            Log.e(
+                TAG,
+                "Bitmap conversion failed",
+                e
+            )
+
+            null
+
+        } finally {
+
+            /*
+             * Image must always be closed, including
+             * conversion failures.
+             */
+            image.close()
+        }
+    }
+
+    fun stop() {
 
         if (
-            !isStopping.compareAndSet(
+            !stopped.compareAndSet(
                 false,
                 true
             )
@@ -404,107 +328,55 @@ class AutoClickService : Service() {
             return
         }
 
-        isRunning = false
-
-        loopJob?.cancel()
-        loopJob = null
-
-        captureManager?.stop()
-        captureManager = null
-
-        stopForeground(
-            STOP_FOREGROUND_REMOVE
-        )
-
-        stopSelf()
+        releaseResources()
     }
 
-    private fun createNotificationChannel() {
+    private fun releaseResources() {
 
-        if (
-            Build.VERSION.SDK_INT >=
-            Build.VERSION_CODES.O
-        ) {
+        try {
 
-            val channel =
-                NotificationChannel(
-                    NOTIFICATION_CHANNEL_ID,
-                    getString(
-                        R.string.notification_channel_name
-                    ),
-                    NotificationManager
-                        .IMPORTANCE_LOW
-                )
+            virtualDisplay?.release()
 
-            val manager =
-                getSystemService(
-                    NotificationManager::class.java
-                )
+        } catch (e: Exception) {
 
-            manager.createNotificationChannel(
-                channel
+            Log.w(
+                TAG,
+                "VirtualDisplay release failed",
+                e
             )
+
+        } finally {
+
+            virtualDisplay = null
         }
+
+        try {
+
+            imageReader?.close()
+
+        } catch (e: Exception) {
+
+            Log.w(
+                TAG,
+                "ImageReader close failed",
+                e
+            )
+
+        } finally {
+
+            imageReader = null
+        }
+
+        try {
+
+            mediaProjection.unregisterCallback(
+                projectionCallback
+            )
+
+        } catch (_: Exception) {
+            // Already unregistered or projection already stopped.
+        }
+
+        handlerThread.quitSafely()
     }
-
-    private fun buildNotification(): Notification {
-
-        val stopIntent =
-            Intent(
-                this,
-                AutoClickService::class.java
-            ).apply {
-                action = ACTION_STOP
-            }
-
-        val stopPendingIntent =
-            PendingIntent.getService(
-                this,
-                0,
-                stopIntent,
-                PendingIntent.FLAG_IMMUTABLE
-            )
-
-        return NotificationCompat.Builder(
-            this,
-            NOTIFICATION_CHANNEL_ID
-        )
-            .setContentTitle(
-                getString(R.string.app_name)
-            )
-            .setContentText(
-                getString(R.string.status_running)
-            )
-            .setSmallIcon(
-                android.R.drawable.ic_menu_search
-            )
-            .setOngoing(true)
-            .addAction(
-                0,
-                getString(R.string.btn_stop),
-                stopPendingIntent
-            )
-            .build()
-    }
-
-    override fun onDestroy() {
-
-        isRunning = false
-
-        loopJob?.cancel()
-        loopJob = null
-
-        captureManager?.stop()
-        captureManager = null
-
-        ocrHelper.close()
-
-        serviceJob.cancel()
-
-        super.onDestroy()
-    }
-
-    override fun onBind(
-        intent: Intent?
-    ): IBinder? = null
 }
