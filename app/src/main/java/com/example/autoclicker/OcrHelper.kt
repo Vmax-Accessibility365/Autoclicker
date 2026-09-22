@@ -9,27 +9,47 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
-data class OcrTextBlock(val text: String, val boundingBox: Rect)
+data class OcrTextBlock(
+    val text: String,
+    val boundingBox: Rect?
+)
 
 class OcrHelper {
 
     private val recognizer: TextRecognizer =
-        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        TextRecognition.getClient(
+            TextRecognizerOptions.DEFAULT_OPTIONS
+        )
 
     /**
-     * Callback-style API (kept for parity with the original design doc).
+     * Callback-style OCR API.
      */
-    fun recognizeText(bitmap: Bitmap, callback: (List<OcrTextBlock>) -> Unit) {
-        val image = InputImage.fromBitmap(bitmap, 0)
-        recognizer.process(image)
+    fun recognizeText(
+        bitmap: Bitmap,
+        callback: (List<OcrTextBlock>) -> Unit
+    ) {
+        val image =
+            InputImage.fromBitmap(bitmap, 0)
+
+        recognizer
+            .process(image)
             .addOnSuccessListener { visionText ->
-                val results = mutableListOf<OcrTextBlock>()
+
+                val results =
+                    mutableListOf<OcrTextBlock>()
+
                 for (block in visionText.textBlocks) {
                     for (line in block.lines) {
-                        val box = line.boundingBox ?: continue
-                        results.add(OcrTextBlock(line.text, box))
+
+                        results.add(
+                            OcrTextBlock(
+                                text = line.text,
+                                boundingBox = line.boundingBox
+                            )
+                        )
                     }
                 }
+
                 callback(results)
             }
             .addOnFailureListener {
@@ -38,13 +58,19 @@ class OcrHelper {
     }
 
     /**
-     * Suspend wrapper so the main loop can `await` OCR results instead of
-     * racing the next screenshot against an in-flight callback.
+     * Suspend wrapper so OCR can be awaited
+     * without racing the next screenshot.
      */
-    suspend fun recognizeTextSuspend(bitmap: Bitmap): List<OcrTextBlock> =
+    suspend fun recognizeTextSuspend(
+        bitmap: Bitmap
+    ): List<OcrTextBlock> =
         suspendCancellableCoroutine { cont ->
+
             recognizeText(bitmap) { results ->
-                if (cont.isActive) cont.resume(results)
+
+                if (cont.isActive) {
+                    cont.resume(results)
+                }
             }
         }
 
