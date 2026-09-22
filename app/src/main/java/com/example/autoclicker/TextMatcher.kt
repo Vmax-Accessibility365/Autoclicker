@@ -230,7 +230,3 @@ Target 2 मिला:
 और इसी तरह:
 
 "3 → CLICK → 4 → CLICK → 5 → ... → आखिरी Target → FINISHED"
-
-और आखिरी Target के बाद वापस Target 1 नहीं आएगा।
-
-एक महत्वपूर्ण सुधार यह भी है कि मैंने "TextSequence" से "loop" parameter हटा दिया है, इसलिए अब गलती से कोई दूसरा code "loop=true" देकर इसे फिर से शुरू नहीं कर सकता। "AutoClickService.kt" में हमने पहले ही "TextSequence(targetText)" वाला उपयोग रखा है, इसलिए दोनों files आपस में match करती हैं।
