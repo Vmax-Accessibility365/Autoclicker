@@ -78,6 +78,10 @@ class AutoClickService : Service() {
         const val EXTRA_TARGETS =
             "extra_targets"
 
+        @Volatile
+        var isRunning: Boolean = false
+            private set
+
         private const val OCR_RETRY_DELAY_MS =
             300L
 
@@ -214,6 +218,8 @@ class AutoClickService : Service() {
             }
 
         screenCaptureManager?.start()
+
+        isRunning = true
 
         startLoop()
     }
@@ -558,6 +564,8 @@ class AutoClickService : Service() {
             "Stopping automation service."
         )
 
+        isRunning = false
+
         loopJob?.cancel()
         loopJob = null
 
@@ -577,6 +585,8 @@ class AutoClickService : Service() {
             TAG,
             "AutoClickService destroyed."
         )
+
+        isRunning = false
 
         loopJob?.cancel()
         loopJob = null
