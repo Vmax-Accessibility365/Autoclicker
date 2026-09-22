@@ -24,40 +24,63 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
-    private val requestNotificationPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (!granted) {
-            Toast.makeText(
-                this,
-                "Notifications OFF karne par service ka status dikhana mushkil hoga.",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
+    private val requestNotificationPermission =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
 
-    private val requestScreenCapture = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK && result.data != null) {
-            launchAutoClickService(result.resultCode, result.data!!)
-        } else {
-            Toast.makeText(
-                this,
-                "Screen capture permission zaroori hai.",
-                Toast.LENGTH_LONG
-            ).show()
+            if (!granted) {
+
+                Toast.makeText(
+                    this,
+                    "Notifications OFF karne par service ka status dikhana mushkil hoga.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
-    }
+
+    private val requestScreenCapture =
+        registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+
+            if (
+                result.resultCode == RESULT_OK &&
+                result.data != null
+            ) {
+
+                launchAutoClickService(
+                    result.resultCode,
+                    result.data!!
+                )
+
+            } else {
+
+                Toast.makeText(
+                    this,
+                    "Screen capture permission zaroori hai.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
 
     private var pendingTargetText: String = ""
-    private var pendingInterval: Long = DEFAULT_INTERVAL_MS
+
+    private var pendingInterval: Long =
+        DEFAULT_INTERVAL_MS
+
     private var pendingRetry: Boolean = true
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+    override fun onCreate(
+        savedInstanceState: Bundle?
+    ) {
         super.onCreate(savedInstanceState)
 
-        binding = ActivityMainBinding.inflate(layoutInflater)
+        binding =
+            ActivityMainBinding.inflate(
+                layoutInflater
+            )
+
         setContentView(binding.root)
 
         binding.startBtn.setOnClickListener {
@@ -77,14 +100,18 @@ class MainActivity : AppCompatActivity() {
     private fun onStartClicked() {
 
         val targetText =
-            binding.textInput.text.toString().trim()
+            binding.textInput.text
+                .toString()
+                .trim()
 
         if (TextUtils.isEmpty(targetText)) {
+
             Toast.makeText(
                 this,
                 "Pehle target text bharein.",
                 Toast.LENGTH_SHORT
             ).show()
+
             return
         }
 
@@ -95,24 +122,23 @@ class MainActivity : AppCompatActivity() {
                 .toLongOrNull()
 
         if (enteredInterval == null) {
+
             Toast.makeText(
                 this,
                 "Valid interval number dalein.",
                 Toast.LENGTH_SHORT
             ).show()
+
             return
         }
 
-        /*
-         * Minimum interval = 50 ms.
-         *
-         * Agar user 50 se kam value deta hai,
-         * to service ko 50 ms hi bheja jayega.
-         */
         val interval =
-            enteredInterval.coerceAtLeast(MIN_INTERVAL_MS)
+            enteredInterval.coerceAtLeast(
+                MIN_INTERVAL_MS
+            )
 
         if (!isAccessibilityServiceEnabled()) {
+
             Toast.makeText(
                 this,
                 "Accessibility service ON karein: Settings -> Accessibility -> ${getString(R.string.app_name)}",
@@ -120,31 +146,37 @@ class MainActivity : AppCompatActivity() {
             ).show()
 
             startActivity(
-                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                Intent(
+                    Settings.ACTION_ACCESSIBILITY_SETTINGS
+                )
             )
 
             return
         }
 
         if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            Build.VERSION.SDK_INT >=
+            Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
-            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
+
             requestNotificationPermission.launch(
                 Manifest.permission.POST_NOTIFICATIONS
             )
         }
 
         /*
-         * Screen-capture permission dialog ke baad
-         * ye values service ko bheji jayengi.
+         * Save values until the screen-capture
+         * permission callback returns.
          */
         pendingTargetText = targetText
         pendingInterval = interval
-        pendingRetry = binding.retryCheck.isChecked
+        pendingRetry =
+            binding.retryCheck.isChecked
 
         val projectionManager =
             getSystemService(
@@ -152,7 +184,8 @@ class MainActivity : AppCompatActivity() {
             ) as MediaProjectionManager
 
         requestScreenCapture.launch(
-            projectionManager.createScreenCaptureIntent()
+            projectionManager
+                .createScreenCaptureIntent()
         )
     }
 
@@ -161,35 +194,58 @@ class MainActivity : AppCompatActivity() {
         data: Intent
     ) {
 
+        /*
+         * Convert the Activity result into the actual
+         * MediaProjection object.
+         *
+         * AutoClickService receives the projection
+         * through MediaProjectionHolder.
+         */
+        val projectionManager =
+            getSystemService(
+                Context.MEDIA_PROJECTION_SERVICE
+            ) as MediaProjectionManager
+
+        val mediaProjection =
+            projectionManager.getMediaProjection(
+                resultCode,
+                data
+            )
+
+        if (mediaProjection == null) {
+
+            Toast.makeText(
+                this,
+                "MediaProjection start nahi ho saka.",
+                Toast.LENGTH_LONG
+            ).show()
+
+            return
+        }
+
+        MediaProjectionHolder.mediaProjection =
+            mediaProjection
+
+        /*
+         * Current AutoClickService API:
+         *
+         * ACTION_START
+         * EXTRA_TARGETS
+         *
+         * TextSequence controls the order of targets.
+         */
         val intent =
             Intent(
                 this,
                 AutoClickService::class.java
             ).apply {
 
-                putExtra(
-                    AutoClickService.EXTRA_RESULT_CODE,
-                    resultCode
-                )
+                action =
+                    AutoClickService.ACTION_START
 
                 putExtra(
-                    AutoClickService.EXTRA_RESULT_DATA,
-                    data
-                )
-
-                putExtra(
-                    AutoClickService.EXTRA_TARGET_TEXT,
+                    AutoClickService.EXTRA_TARGETS,
                     pendingTargetText
-                )
-
-                putExtra(
-                    AutoClickService.EXTRA_INTERVAL_MS,
-                    pendingInterval
-                )
-
-                putExtra(
-                    AutoClickService.EXTRA_RETRY,
-                    pendingRetry
                 )
             }
 
@@ -198,7 +254,9 @@ class MainActivity : AppCompatActivity() {
             intent
         )
 
-        updateStatusUi(running = true)
+        updateStatusUi(
+            running = true
+        )
     }
 
     private fun onStopClicked() {
@@ -208,16 +266,21 @@ class MainActivity : AppCompatActivity() {
                 this,
                 AutoClickService::class.java
             ).apply {
-                action = AutoClickService.ACTION_STOP
+
+                action =
+                    AutoClickService.ACTION_STOP
             }
 
         startService(intent)
 
-        updateStatusUi(running = false)
+        updateStatusUi(
+            running = false
+        )
     }
 
     private fun updateStatusUi(
-        running: Boolean = AutoClickService.isRunning
+        running: Boolean =
+            AutoClickService.isRunning
     ) {
 
         binding.statusText.text =
@@ -229,8 +292,11 @@ class MainActivity : AppCompatActivity() {
                 }
             )
 
-        binding.startBtn.isEnabled = !running
-        binding.stopBtn.isEnabled = running
+        binding.startBtn.isEnabled =
+            !running
+
+        binding.stopBtn.isEnabled =
+            running
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
@@ -250,7 +316,9 @@ class MainActivity : AppCompatActivity() {
         val splitter =
             TextUtils.SimpleStringSplitter(':')
 
-        splitter.setString(enabledServices)
+        splitter.setString(
+            enabledServices
+        )
 
         while (splitter.hasNext()) {
 
