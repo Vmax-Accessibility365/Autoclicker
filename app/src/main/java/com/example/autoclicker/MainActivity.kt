@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
@@ -24,13 +25,14 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
 
+    private var pendingTargetText: String = ""
+
     private val requestNotificationPermission =
         registerForActivityResult(
             ActivityResultContracts.RequestPermission()
         ) { granted ->
 
             if (!granted) {
-
                 Toast.makeText(
                     this,
                     "Notifications OFF karne par service ka status dikhana mushkil hoga.",
@@ -64,13 +66,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-    private var pendingTargetText: String = ""
-
-    private var pendingInterval: Long =
-        DEFAULT_INTERVAL_MS
-
-    private var pendingRetry: Boolean = true
-
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
@@ -82,6 +77,20 @@ class MainActivity : AppCompatActivity() {
             )
 
         setContentView(binding.root)
+
+        /*
+         * Keep the UI minimum interval at 50 ms.
+         */
+        if (
+            binding.intervalInput.text
+                .toString()
+                .trim()
+                .isEmpty()
+        ) {
+            binding.intervalInput.setText(
+                DEFAULT_INTERVAL_MS.toString()
+            )
+        }
 
         binding.startBtn.setOnClickListener {
             onStartClicked()
@@ -115,6 +124,13 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        /*
+         * Current AutoClickService does not consume
+         * interval/retry values directly.
+         *
+         * Keep the existing UI validation so an invalid
+         * interval cannot start the automation.
+         */
         val enteredInterval =
             binding.intervalInput.text
                 .toString()
@@ -137,6 +153,10 @@ class MainActivity : AppCompatActivity() {
                 MIN_INTERVAL_MS
             )
 
+        binding.intervalInput.setText(
+            interval.toString()
+        )
+
         if (!isAccessibilityServiceEnabled()) {
 
             Toast.makeText(
@@ -154,14 +174,16 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        /*
+         * Ask for notification permission on Android 13+.
+         */
         if (
             Build.VERSION.SDK_INT >=
             Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.POST_NOTIFICATIONS
-            ) !=
-            android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) != PackageManager.PERMISSION_GRANTED
         ) {
 
             requestNotificationPermission.launch(
@@ -170,13 +192,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         /*
-         * Save values until the screen-capture
-         * permission callback returns.
+         * Save only the value currently required by
+         * AutoClickService.
          */
-        pendingTargetText = targetText
-        pendingInterval = interval
-        pendingRetry =
-            binding.retryCheck.isChecked
+        pendingTargetText =
+            targetText
 
         val projectionManager =
             getSystemService(
@@ -195,11 +215,7 @@ class MainActivity : AppCompatActivity() {
     ) {
 
         /*
-         * Convert the Activity result into the actual
-         * MediaProjection object.
-         *
-         * AutoClickService receives the projection
-         * through MediaProjectionHolder.
+         * Convert Activity result into MediaProjection.
          */
         val projectionManager =
             getSystemService(
@@ -223,6 +239,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        /*
+         * Make projection available to AutoClickService.
+         */
         MediaProjectionHolder.mediaProjection =
             mediaProjection
 
@@ -232,9 +251,9 @@ class MainActivity : AppCompatActivity() {
          * ACTION_START
          * EXTRA_TARGETS
          *
-         * TextSequence controls the order of targets.
+         * TextSequence controls target order.
          */
-        val intent =
+        val serviceIntent =
             Intent(
                 this,
                 AutoClickService::class.java
@@ -251,9 +270,15 @@ class MainActivity : AppCompatActivity() {
 
         ContextCompat.startForegroundService(
             this,
-            intent
+            serviceIntent
         )
 
+        /*
+         * AutoClickService sets its own isRunning state
+         * after successful initialization.
+         *
+         * Update UI immediately for responsiveness.
+         */
         updateStatusUi(
             running = true
         )
@@ -261,7 +286,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun onStopClicked() {
 
-        val intent =
+        val serviceIntent =
             Intent(
                 this,
                 AutoClickService::class.java
@@ -271,7 +296,9 @@ class MainActivity : AppCompatActivity() {
                     AutoClickService.ACTION_STOP
             }
 
-        startService(intent)
+        startService(
+            serviceIntent
+        )
 
         updateStatusUi(
             running = false
