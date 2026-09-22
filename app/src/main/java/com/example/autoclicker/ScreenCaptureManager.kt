@@ -14,23 +14,23 @@ import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Handles MediaProjection screenshot capture.
+ * Handles MediaProjection screen capture.
  *
- * Android 14+:
- * MediaProjection.Callback must be registered before
- * createVirtualDisplay() is called.
- *
- * This class only captures the screen.
- * Target matching and sequence control are handled elsewhere.
+ * This class only captures screen frames.
+ * Target 1 -> Target 2 -> Target 3 sequence control
+ * remains inside AutoClickService / TextSequence.
  */
 class ScreenCaptureManager(
     private val context: Context,
     private val mediaProjection: MediaProjection,
-    private val onProjectionStopped: () -> Unit = {}
+    private val onProjectionStopped: () -> Unit
 ) {
 
     companion object {
         private const val TAG = "ScreenCaptureManager"
+        private const val VIRTUAL_DISPLAY_NAME =
+            "AutoClickScreenCapture"
+
         private const val IMAGE_READER_MAX_IMAGES = 2
     }
 
@@ -56,19 +56,28 @@ class ScreenCaptureManager(
         object : MediaProjection.Callback() {
 
             override fun onStop() {
-                Log.d(
+
+                Log.w(
                     TAG,
-                    "MediaProjection stopped by system/user"
+                    "MediaProjection stopped by system or user"
                 )
 
-                if (stopped.compareAndSet(false, true)) {
+                if (
+                    stopped.compareAndSet(
+                        false,
+                        true
+                    )
+                ) {
+
                     releaseResources()
+
                     onProjectionStopped()
                 }
             }
         }
 
     init {
+
         val metrics =
             context.resources.displayMetrics
 
@@ -82,8 +91,8 @@ class ScreenCaptureManager(
             metrics.densityDpi
 
         /*
-         * Required on Android 14+ before
-         * createVirtualDisplay().
+         * Android 14+ requires the callback to be
+         * registered before createVirtualDisplay().
          */
         mediaProjection.registerCallback(
             projectionCallback,
@@ -94,10 +103,12 @@ class ScreenCaptureManager(
     fun start() {
 
         if (stopped.get()) {
+
             Log.w(
                 TAG,
-                "start() ignored: capture manager already stopped"
+                "start() ignored: manager already stopped"
             )
+
             return
         }
 
@@ -106,6 +117,22 @@ class ScreenCaptureManager(
         }
 
         try {
+
+            if (
+                width <= 0 ||
+                height <= 0 ||
+                density <= 0
+            ) {
+
+                Log.e(
+                    TAG,
+                    "Invalid display metrics: " +
+                        "${width}x${height}, density=$density"
+                )
+
+                releaseResources()
+                return
+            }
 
             val reader =
                 ImageReader.newInstance(
@@ -119,11 +146,12 @@ class ScreenCaptureManager(
 
             virtualDisplay =
                 mediaProjection.createVirtualDisplay(
-                    "AutoClickerCapture",
+                    VIRTUAL_DISPLAY_NAME,
                     width,
                     height,
                     density,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    DisplayManager
+                        .VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     reader.surface,
                     null,
                     backgroundHandler
@@ -131,25 +159,26 @@ class ScreenCaptureManager(
 
             Log.d(
                 TAG,
-                "Screen capture started: ${width}x$height"
+                "VirtualDisplay created successfully " +
+                    "($width x $height)"
             )
 
         } catch (e: Exception) {
 
             Log.e(
                 TAG,
-                "Failed to start screen capture",
+                "Failed to start ScreenCaptureManager",
                 e
             )
 
-            releaseResources()
+            stop()
         }
     }
 
     /**
      * Returns the newest available screen frame.
      *
-     * Returns null when a frame is not available yet.
+     * Returns null when a new frame is not available yet.
      */
     fun captureBitmap(): Bitmap? {
 
@@ -162,13 +191,23 @@ class ScreenCaptureManager(
 
         val image =
             try {
+
+                /*
+                 * acquireLatestImage() intentionally used here.
+                 *
+                 * Old frames are discarded so the OCR loop
+                 * works with the newest available screen.
+                 */
                 reader.acquireLatestImage()
+
             } catch (e: Exception) {
+
                 Log.e(
                     TAG,
                     "acquireLatestImage() failed",
                     e
                 )
+
                 null
             } ?: return null
 
@@ -198,16 +237,28 @@ class ScreenCaptureManager(
                 plane.rowStride
 
             if (pixelStride <= 0) {
+
                 Log.w(
                     TAG,
                     "Invalid pixelStride: $pixelStride"
                 )
+
                 return null
             }
 
             val rowPadding =
                 rowStride -
                     pixelStride * width
+
+            if (rowPadding < 0) {
+
+                Log.w(
+                    TAG,
+                    "Invalid rowPadding: $rowPadding"
+                )
+
+                return null
+            }
 
             val paddedWidth =
                 width +
@@ -222,7 +273,9 @@ class ScreenCaptureManager(
 
             buffer.rewind()
 
-            bitmap.copyPixelsFromBuffer(buffer)
+            bitmap.copyPixelsFromBuffer(
+                buffer
+            )
 
             if (paddedWidth == width) {
 
@@ -256,13 +309,22 @@ class ScreenCaptureManager(
 
         } finally {
 
+            /*
+             * Image must always be closed, including
+             * conversion failures.
+             */
             image.close()
         }
     }
 
     fun stop() {
 
-        if (!stopped.compareAndSet(false, true)) {
+        if (
+            !stopped.compareAndSet(
+                false,
+                true
+            )
+        ) {
             return
         }
 
@@ -272,33 +334,45 @@ class ScreenCaptureManager(
     private fun releaseResources() {
 
         try {
+
             virtualDisplay?.release()
+
         } catch (e: Exception) {
+
             Log.w(
                 TAG,
                 "VirtualDisplay release failed",
                 e
             )
+
         } finally {
+
             virtualDisplay = null
         }
 
         try {
+
             imageReader?.close()
+
         } catch (e: Exception) {
+
             Log.w(
                 TAG,
                 "ImageReader close failed",
                 e
             )
+
         } finally {
+
             imageReader = null
         }
 
         try {
+
             mediaProjection.unregisterCallback(
                 projectionCallback
             )
+
         } catch (_: Exception) {
             // Already unregistered or projection already stopped.
         }
