@@ -6,46 +6,122 @@ import kotlin.math.max
  * Finds the OCR block that best matches the current target.
  *
  * Matching order:
- * 1. Case-insensitive contains match.
- * 2. Fuzzy match using normalized Levenshtein similarity.
+ * 1. Normalized case-insensitive contains match.
+ * 2. Normalized fuzzy match using Levenshtein similarity.
  *
- * This class only finds a match.
+ * This class ONLY finds a matching OCR block.
  * Sequence/order control is handled by TextSequence.
  */
 object TextMatcher {
 
+    /**
+     * Minimum fuzzy similarity required for a match.
+     */
     private const val FUZZY_THRESHOLD = 0.82
 
+    /**
+     * Fuzzy matching is disabled for very short targets.
+     *
+     * Short strings such as:
+     * "OK"
+     * "1"
+     * "2"
+     *
+     * can easily produce false positives.
+     */
+    private const val MIN_FUZZY_LENGTH = 3
+
+    /**
+     * Finds the OCR block matching the target.
+     *
+     * Returns:
+     * - matching OcrTextBlock when found
+     * - null when the target is not found
+     *
+     * IMPORTANT:
+     * This function does NOT change sequence state.
+     */
     fun findMatch(
         blocks: List<OcrTextBlock>,
         target: String
     ): OcrTextBlock? {
 
-        if (target.isBlank()) {
+        if (blocks.isEmpty() || target.isBlank()) {
             return null
         }
 
-        // Fast path: exact substring match, ignoring case.
-        blocks.firstOrNull {
-            it.text.contains(
-                target,
-                ignoreCase = true
-            )
-        }?.let {
-            return it
+        val normalizedTarget = normalize(target)
+
+        if (normalizedTarget.isEmpty()) {
+            return null
         }
 
-        // Fuzzy matching for small OCR mistakes.
+        /*
+         * ---------------------------------------------------------
+         * FAST PATH
+         * ---------------------------------------------------------
+         *
+         * First look for a normalized contains match.
+         *
+         * Example:
+         *
+         * Target:
+         * "Continue"
+         *
+         * OCR:
+         * "Please click Continue button"
+         *
+         * => MATCH
+         */
+        blocks.firstOrNull { block ->
+
+            val text = normalize(block.text)
+
+            text.contains(
+                normalizedTarget,
+                ignoreCase = true
+            )
+
+        }?.let { block ->
+            return block
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * FUZZY MATCH
+         * ---------------------------------------------------------
+         *
+         * Used for small OCR mistakes.
+         *
+         * Example:
+         *
+         * Target:
+         * "Continue"
+         *
+         * OCR:
+         * "Contlnue"
+         *
+         * => possible fuzzy MATCH
+         */
+        if (normalizedTarget.length < MIN_FUZZY_LENGTH) {
+            return null
+        }
+
         var bestMatch: OcrTextBlock? = null
         var bestScore = 0.0
 
         for (block in blocks) {
 
-            val score =
-                similarity(
-                    block.text,
-                    target
-                )
+            val normalizedText = normalize(block.text)
+
+            if (normalizedText.isEmpty()) {
+                continue
+            }
+
+            val score = similarity(
+                normalizedText,
+                normalizedTarget
+            )
 
             if (score > bestScore) {
                 bestScore = score
@@ -60,34 +136,65 @@ object TextMatcher {
         }
     }
 
+    /**
+     * Normalizes OCR text before comparison.
+     *
+     * Handles:
+     * - upper/lower case
+     * - repeated spaces
+     * - line breaks
+     * - leading/trailing spaces
+     */
+    private fun normalize(
+        value: String
+    ): String {
+
+        return value
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .lowercase()
+    }
+
+    /**
+     * Calculates normalized Levenshtein similarity.
+     *
+     * Result:
+     *
+     * 1.0 = identical
+     * 0.0 = completely different
+     */
     private fun similarity(
         a: String,
         b: String
     ): Double {
 
-        val lowerA = a.lowercase()
-        val lowerB = b.lowercase()
-
-        val distance =
-            levenshtein(
-                lowerA,
-                lowerB
-            )
-
-        val longest =
-            max(
-                lowerA.length,
-                lowerB.length
-            )
-
-        if (longest == 0) {
+        if (a == b) {
             return 1.0
         }
+
+        if (a.isEmpty() || b.isEmpty()) {
+            return 0.0
+        }
+
+        val distance = levenshtein(
+            a,
+            b
+        )
+
+        val longest = max(
+            a.length,
+            b.length
+        )
 
         return 1.0 -
             distance.toDouble() / longest
     }
 
+    /**
+     * Calculates Levenshtein edit distance.
+     */
     private fun levenshtein(
         a: String,
         b: String
@@ -129,104 +236,3 @@ object TextMatcher {
         return dp[a.length][b.length]
     }
 }
-
-/**
- * Maintains the ordered target sequence.
- *
- * Example:
- *
- * Target 1 -> Target 2 -> Target 3 -> Target 4
- *
- * advance() is called ONLY after the current target
- * has been successfully clicked.
- *
- * The sequence never loops back to Target 1.
- */
-class TextSequence(
-    rawInput: String
-) {
-
-    val targets: List<String> =
-        rawInput
-            .split(",")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-
-    var currentIndex: Int = 0
-        private set
-
-    /**
-     * Target currently being searched.
-     *
-     * If the current target is not found,
-     * currentIndex does not change, so the same target
-     * will be searched again.
-     */
-    val currentTarget: String?
-        get() = targets.getOrNull(currentIndex)
-
-    /**
-     * True when there are no targets or the final target
-     * has already been advanced past.
-     */
-    val isFinished: Boolean
-        get() =
-            targets.isEmpty() ||
-                currentIndex >= targets.size
-
-    /**
-     * Moves to the next target.
-     *
-     * IMPORTANT:
-     * This must be called only after a successful click.
-     *
-     * Example:
-     *
-     * Target 1 found -> click -> advance()
-     * Target 2 found -> click -> advance()
-     * Target 3 found -> click -> advance()
-     *
-     * After the final target, the sequence is finished.
-     * It does NOT return to Target 1.
-     */
-    fun advance() {
-
-        if (isFinished) {
-            return
-        }
-
-        currentIndex += 1
-    }
-
-    /**
-     * Resets the sequence to Target 1.
-     *
-     * This is only used when a completely new run needs
-     * to start from the beginning.
-     */
-    fun reset() {
-        currentIndex = 0
-    }
-}
-
-अब इसका behavior बिल्कुल ऐसा है
-
-Target 1 नहीं मिला:
-
-"1 → 1 → 1 → 1..."
-
-Target 1 मिला:
-
-"1 → CLICK → 2"
-
-Target 2 नहीं मिला:
-
-"2 → 2 → 2 → 2..."
-
-Target 2 मिला:
-
-"2 → CLICK → 3"
-
-और इसी तरह:
-
-"3 → CLICK → 4 → CLICK → 5 → ... → आखिरी Target → FINISHED"
