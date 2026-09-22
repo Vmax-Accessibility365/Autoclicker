@@ -3,12 +3,12 @@ package com.example.autoclicker
 import android.app.Service
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.Rect
 import android.os.IBinder
 import android.util.Log
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,14 +20,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
-
-/**
- * OCR text block with its screen bounding box.
- */
-data class OcrTextBlock(
-    val text: String,
-    val boundingBox: Rect?
-)
 
 /**
  * Holds MediaProjection so it can be passed from Activity
@@ -166,10 +158,6 @@ class AutoClickService : Service() {
             "Starting automation: $rawTargets"
         )
 
-        /*
-         * Stop any previous run before starting
-         * a new sequence.
-         */
         loopJob?.cancel()
 
         screenCaptureManager?.stop()
@@ -233,16 +221,12 @@ class AutoClickService : Service() {
     /**
      * Main OCR/search loop.
      *
-     * IMPORTANT:
+     * Not found:
+     *     same target is searched again.
      *
-     * currentTarget is read every cycle.
-     *
-     * Therefore:
-     *
-     * not found → same target
-     *
-     * successful click → sequence.advance()
-     * → next cycle reads next target
+     * Successful click:
+     *     sequence.advance()
+     *     next target becomes active.
      */
     private fun startLoop() {
 
@@ -259,9 +243,6 @@ class AutoClickService : Service() {
                     val captureManager =
                         screenCaptureManager
 
-                    /*
-                     * Nothing to process.
-                     */
                     if (
                         sequence == null ||
                         captureManager == null
@@ -269,10 +250,6 @@ class AutoClickService : Service() {
                         break
                     }
 
-                    /*
-                     * Last target has already been
-                     * completed.
-                     */
                     if (sequence.isFinished) {
 
                         Log.d(
@@ -284,10 +261,6 @@ class AutoClickService : Service() {
                         break
                     }
 
-                    /*
-                     * A previous click is still being
-                     * processed.
-                     */
                     if (isProcessing.get()) {
 
                         delay(
@@ -297,9 +270,6 @@ class AutoClickService : Service() {
                         continue
                     }
 
-                    /*
-                     * Read the current target.
-                     */
                     val currentTarget =
                         sequence.currentTarget
 
@@ -319,9 +289,6 @@ class AutoClickService : Service() {
                         "Searching current target: '$currentTarget'"
                     )
 
-                    /*
-                     * Capture newest available frame.
-                     */
                     val bitmap =
                         captureManager
                             .captureBitmap()
@@ -335,23 +302,12 @@ class AutoClickService : Service() {
                         continue
                     }
 
-                    /*
-                     * OCR and click are awaited here.
-                     *
-                     * This prevents the loop from starting
-                     * another OCR cycle while the current
-                     * click callback is still pending.
-                     */
                     processOcrAndMatch(
                         bitmap,
                         currentTarget,
                         sequence
                     )
 
-                    /*
-                     * Small delay before the next
-                     * screen scan.
-                     */
                     delay(
                         SCAN_DELAY_MS
                     )
@@ -362,11 +318,8 @@ class AutoClickService : Service() {
     /**
      * Runs OCR for the current target.
      *
-     * No sequence advancement happens here merely because
-     * the target was found.
-     *
-     * Sequence advances ONLY after clickAt() reports
-     * successful gesture completion.
+     * Sequence advances ONLY after the click gesture
+     * reports successful completion.
      */
     private suspend fun processOcrAndMatch(
         bitmap: Bitmap,
@@ -419,10 +372,6 @@ class AutoClickService : Service() {
                         }
                 }
 
-            /*
-             * Convert ML Kit text into the format
-             * expected by TextMatcher.
-             */
             val blocks =
                 mutableListOf<OcrTextBlock>()
 
@@ -436,20 +385,13 @@ class AutoClickService : Service() {
 
                     blocks.add(
                         OcrTextBlock(
-                            text =
-                                line.text,
-                            boundingBox =
-                                line.boundingBox
+                            text = line.text,
+                            boundingBox = line.boundingBox
                         )
                     )
                 }
             }
 
-            /*
-             * Search ONLY for the current target.
-             *
-             * TextMatcher does not control sequence order.
-             */
             val match =
                 TextMatcher.findMatch(
                     blocks,
@@ -461,15 +403,6 @@ class AutoClickService : Service() {
                 match.boundingBox == null
             ) {
 
-                /*
-                 * Target not found.
-                 *
-                 * IMPORTANT:
-                 * No sequence.advance().
-                 *
-                 * The next loop iteration searches
-                 * the SAME target again.
-                 */
                 Log.d(
                     TAG,
                     "Target '$currentTarget' not found. Retrying."
@@ -501,22 +434,17 @@ class AutoClickService : Service() {
 
                 Log.w(
                     TAG,
-                    "Accessibility service is not ready. Retrying current target."
+                    "Accessibility service is not ready. " +
+                        "Retrying current target."
                 )
 
                 return
             }
 
-            /*
-             * Lock processing before starting the gesture.
-             */
             isProcessing.set(true)
 
             try {
 
-                /*
-                 * WAIT for the actual gesture result.
-                 */
                 val clickSuccess =
                     suspendCancellableCoroutine<Boolean> {
                         continuation ->
@@ -537,25 +465,16 @@ class AutoClickService : Service() {
                         }
 
                         continuation.invokeOnCancellation {
-                            /*
-                             * The accessibility service owns
-                             * the gesture lifecycle.
-                             *
-                             * No sequence advancement occurs
-                             * when this coroutine is cancelled.
-                             */
+                            // Gesture lifecycle remains owned
+                            // by ClickAccessibilityService.
                         }
                     }
 
                 if (clickSuccess) {
 
                     /*
-                     * CRITICAL:
-                     *
-                     * clickAt() returns true here only after
-                     * GestureResultCallback.onCompleted().
-                     *
-                     * Therefore advancing the sequence now is safe.
+                     * Advance ONLY after successful gesture
+                     * completion.
                      */
                     sequence.advance()
 
@@ -579,11 +498,8 @@ class AutoClickService : Service() {
                 } else {
 
                     /*
-                     * Click failed/cancelled.
-                     *
-                     * DO NOT advance.
-                     *
-                     * The same target will be searched again.
+                     * Failed click:
+                     * keep the same target.
                      */
                     Log.w(
                         TAG,
@@ -601,10 +517,6 @@ class AutoClickService : Service() {
             cancellation: CancellationException
         ) {
 
-            /*
-             * Coroutine cancellation is not treated as
-             * successful target completion.
-             */
             Log.d(
                 TAG,
                 "OCR/click operation cancelled."
@@ -621,16 +533,13 @@ class AutoClickService : Service() {
             )
 
             /*
-             * Any unexpected error keeps the current
-             * sequence target unchanged.
+             * Unexpected error:
+             * current target remains unchanged.
              */
             isProcessing.set(false)
 
         } finally {
 
-            /*
-             * This bitmap belongs to this OCR cycle.
-             */
             try {
                 bitmap.recycle()
             } catch (_: Exception) {
