@@ -10,19 +10,27 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 
 /**
- * Accessibility service responsible for:
+ * Accessibility service responsible only for executing clicks
+ * and providing accessibility-node based click support.
  *
- * 1. Coordinate-based tapping through dispatchGesture()
- * 2. Accessibility-node text searching/clicking
+ * Sequence control is handled by AutoClickService / TextSequence.
  *
- * Sequence control is NOT handled here.
- * AutoClickService controls:
+ * Flow:
  *
- * Target 1 -> Target 2 -> Target 3 -> ...
+ * Target found
+ *      ↓
+ * clickAt()
+ *      ↓
+ * Gesture completed
+ *      ↓
+ * callback(true)
+ *      ↓
+ * AutoClickService advances sequence
  */
 class ClickAccessibilityService : AccessibilityService() {
 
     companion object {
+
         private const val TAG = "ClickA11yService"
 
         private const val GESTURE_START_DELAY_MS = 0L
@@ -51,11 +59,12 @@ class ClickAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(
         event: AccessibilityEvent?
     ) {
-        // Accessibility events are not required for the
-        // OCR-based sequence.
+        // OCR-based sequence does not depend on
+        // accessibility events.
     }
 
     override fun onInterrupt() {
+
         Log.w(
             TAG,
             "Accessibility service interrupted"
@@ -68,16 +77,28 @@ class ClickAccessibilityService : AccessibilityService() {
 
         instance = null
 
+        Log.d(
+            TAG,
+            "Accessibility service disconnected"
+        )
+
         return super.onUnbind(intent)
     }
 
     /**
      * Performs one coordinate-based tap.
      *
-     * Returns true when dispatchGesture() successfully
-     * accepts the gesture.
+     * IMPORTANT:
      *
-     * The optional callback reports the final gesture result.
+     * The Boolean returned by this function tells whether
+     * dispatchGesture() accepted the gesture.
+     *
+     * The callback Boolean tells whether the gesture actually
+     * completed successfully.
+     *
+     * AutoClickService must advance TextSequence ONLY from:
+     *
+     * onResult(true)
      */
     fun clickAt(
         x: Float,
@@ -86,9 +107,25 @@ class ClickAccessibilityService : AccessibilityService() {
     ): Boolean {
 
         if (!isReady()) {
+
             Log.w(
                 TAG,
                 "clickAt() ignored: service is not ready"
+            )
+
+            onResult?.invoke(false)
+
+            return false
+        }
+
+        if (
+            x < 0f ||
+            y < 0f
+        ) {
+
+            Log.w(
+                TAG,
+                "clickAt() ignored: invalid coordinates ($x, $y)"
             )
 
             onResult?.invoke(false)
@@ -119,6 +156,7 @@ class ClickAccessibilityService : AccessibilityService() {
                 override fun onCompleted(
                     gestureDescription: GestureDescription?
                 ) {
+
                     super.onCompleted(
                         gestureDescription
                     )
@@ -128,12 +166,17 @@ class ClickAccessibilityService : AccessibilityService() {
                         "Gesture completed at ($x, $y)"
                     )
 
+                    /*
+                     * This is the ONLY place where the caller
+                     * receives a successful click result.
+                     */
                     onResult?.invoke(true)
                 }
 
                 override fun onCancelled(
                     gestureDescription: GestureDescription?
                 ) {
+
                     super.onCancelled(
                         gestureDescription
                     )
@@ -160,7 +203,7 @@ class ClickAccessibilityService : AccessibilityService() {
 
                 Log.w(
                     TAG,
-                    "dispatchGesture() returned false for ($x, $y)"
+                    "dispatchGesture() returned false at ($x, $y)"
                 )
 
                 onResult?.invoke(false)
@@ -183,10 +226,10 @@ class ClickAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Searches all available accessibility windows for
-     * target text and performs ACTION_CLICK when possible.
+     * Searches all available accessibility windows
+     * for the supplied text.
      *
-     * This method is independent from the OCR sequence.
+     * This is independent from the OCR sequence.
      */
     fun findAndClickInAnyWindow(
         targetText: String
@@ -199,13 +242,14 @@ class ClickAccessibilityService : AccessibilityService() {
         return try {
 
             val activeWindows:
-                List<AccessibilityWindowInfo>? = windows
+                List<AccessibilityWindowInfo>? =
+                windows
 
             if (activeWindows.isNullOrEmpty()) {
 
                 Log.d(
                     TAG,
-                    "No active windows available."
+                    "No active accessibility windows."
                 )
 
                 return false
@@ -232,10 +276,11 @@ class ClickAccessibilityService : AccessibilityService() {
 
                         try {
 
-                            val clicked =
-                                performSafeClick(target)
-
-                            if (clicked) {
+                            if (
+                                performSafeClick(
+                                    target
+                                )
+                            ) {
 
                                 Log.d(
                                     TAG,
@@ -246,11 +291,13 @@ class ClickAccessibilityService : AccessibilityService() {
                             }
 
                         } finally {
+
                             target.recycle()
                         }
                     }
 
                 } finally {
+
                     root.recycle()
                 }
             }
@@ -270,20 +317,21 @@ class ClickAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Depth-first search.
+     * Recursively searches a node tree.
      *
-     * Matches either:
+     * Matches:
      * - node.text
      * - node.contentDescription
-     *
-     * Matching is case-insensitive.
      */
     private fun findNodeByText(
         node: AccessibilityNodeInfo?,
         targetText: String
     ): AccessibilityNodeInfo? {
 
-        if (node == null || targetText.isBlank()) {
+        if (
+            node == null ||
+            targetText.isBlank()
+        ) {
             return null
         }
 
@@ -303,7 +351,10 @@ class ClickAccessibilityService : AccessibilityService() {
                 ignoreCase = true
             ) == true
         ) {
-            return AccessibilityNodeInfo.obtain(node)
+
+            return AccessibilityNodeInfo.obtain(
+                node
+            )
         }
 
         for (i in 0 until node.childCount) {
@@ -317,11 +368,14 @@ class ClickAccessibilityService : AccessibilityService() {
 
             val result =
                 try {
+
                     findNodeByText(
                         child,
                         targetText
                     )
+
                 } finally {
+
                     child.recycle()
                 }
 
@@ -334,14 +388,16 @@ class ClickAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Performs ACTION_CLICK on the node itself or,
-     * when necessary, on a clickable ancestor.
+     * Performs ACTION_CLICK on the node itself
+     * or one of its clickable ancestors.
      */
     private fun performSafeClick(
         node: AccessibilityNodeInfo
     ): Boolean {
 
-        var target: AccessibilityNodeInfo? = node
+        var target:
+            AccessibilityNodeInfo? = node
+
         var depth = 0
 
         return try {
@@ -366,15 +422,13 @@ class ClickAccessibilityService : AccessibilityService() {
                 }
 
                 target = parent
+
                 depth++
             }
 
-            val success =
-                target?.performAction(
-                    AccessibilityNodeInfo.ACTION_CLICK
-                ) ?: false
-
-            success
+            target?.performAction(
+                AccessibilityNodeInfo.ACTION_CLICK
+            ) ?: false
 
         } catch (e: Exception) {
 
@@ -397,19 +451,3 @@ class ClickAccessibilityService : AccessibilityService() {
         }
     }
 }
-
-लेकिन एक महत्वपूर्ण बात
-
-"ClickAccessibilityService.kt" अब final है, लेकिन आपके "AutoClickService.kt" में अभी यह है:
-
-clickService.clickAt(cx, cy)
-sequence.advance()
-
-"clickAt()" gesture को asynchronously execute करता है। इसलिए अगला Target बहुत जल्दी शुरू न हो, इसके लिए बाद में "AutoClickService.kt" में छोटा सा coordination सुधार करना उचित होगा—जिसमें click successfully complete होने के बाद ही "sequence.advance()" होगा।
-
-अभी बाकी दो files भी verify करनी हैं:
-
-ScreenCaptureManager.kt
-ClickAccessibilityService.kt
-
-"ClickAccessibilityService.kt" अभी आपने दे दिया और ऊपर final कर दिया है। अब अगली file "ScreenCaptureManager.kt" भेजिए।
