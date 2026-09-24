@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <Spinner
+        android:id="@+id/spinnerTargetType"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <EditText
+        android:id="@+id/editTargetValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Target value (viewId / text / contentDescription)" />
+
+    <Spinner
+        android:id="@+id/spinnerAction"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+
+    <EditText
+        android:id="@+id/editInputTemplate"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Input text (केवल INPUT action के लिए) — {{DATE}} {{TIME}} {{COUNTER}} {{USER_TEXT}} उपयोग कर सकते हैं" />
+
+    <EditText
+        android:id="@+id/editVerifyValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Verify: action के बाद दिखने वाला text/viewId (खाली छोड़ने पर सिर्फ node-exists check होगा)" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/editDelayMs"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:inputType="number"
+            android:hint="Delay (ms)" />
+
+        <EditText
+            android:id="@+id/editTimeoutMs"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:inputType="number"
+            android:hint="Timeout (ms)" />
+
+        <EditText
+            android:id="@+id/editRetryCount"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:inputType="number"
+            android:hint="Retry count" />
+    </LinearLayout>
+
+    <CheckBox
+        android:id="@+id/checkSensitive"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="यह field sensitive है (snapshot में शामिल न हो)" />
+
+</LinearLayout>
+</ScrollView>
